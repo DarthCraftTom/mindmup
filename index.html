@@ -1,0 +1,1706 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MindMup ZŠ – Týmová myšlenková mapa</title>
+  <!-- MQTT.js a QRCode.js z rychlé CDN -->
+  <script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --success: #16a34a;
+      --danger: #dc2626;
+      --warning: #d97706;
+      --radius: 10px;
+      --shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); user-select: none; }
+
+    /* Pomocné třídy */
+    .hidden { display: none !important; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 8px 14px; border-radius: 8px; border: 1px solid transparent;
+      font-weight: 600; font-size: 14px; cursor: pointer; transition: 0.15s;
+      background: var(--primary); color: #fff;
+    }
+    .btn:hover { background: var(--primary-hover); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-outline { background: var(--surface); color: var(--text); border-color: var(--border); }
+    .btn-outline:hover { background: #f1f5f9; }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn-success { background: var(--success); color: #fff; }
+    .btn-sm { padding: 5px 10px; font-size: 12px; border-radius: 6px; }
+
+    input[type="text"], input[type="password"], select {
+      width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+      border-radius: 8px; font-size: 14px; outline: none; background: var(--surface); color: var(--text);
+    }
+    input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
+
+    /* Obrazovka přihlášení */
+    #view-login {
+      width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .login-card {
+      background: var(--surface); width: 100%; max-width: 420px; padding: 32px;
+      border-radius: 16px; box-shadow: var(--shadow); border: 1px solid var(--border); text-align: center;
+    }
+    .login-card h1 { font-size: 24px; margin-bottom: 6px; color: var(--primary); }
+    .login-card p { font-size: 14px; color: var(--muted); margin-bottom: 24px; }
+    .form-group { text-align: left; margin-bottom: 16px; }
+    .form-group label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+    .teacher-toggle { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
+    .teacher-toggle a { color: var(--primary); text-decoration: none; font-weight: 600; cursor: pointer; }
+    .status-msg { margin-top: 12px; padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 500; }
+    .status-info { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+    .status-error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+
+    /* Hlavní pracovní plocha */
+    #view-app { width: 100%; height: 100%; display: flex; flex-direction: column; }
+
+    /* Horní lišta */
+    .topbar {
+      height: 58px; background: var(--surface); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between; padding: 0 16px; z-index: 20;
+    }
+    .topbar-left, .topbar-right { display: flex; align-items: center; gap: 10px; }
+    .room-badge {
+      background: #eff6ff; color: var(--primary); border: 1px solid #bfdbfe;
+      padding: 5px 12px; border-radius: 20px; font-weight: 700; font-size: 14px; letter-spacing: 0.5px;
+    }
+    .role-badge {
+      padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; background: #f1f5f9; color: var(--muted);
+    }
+    .switch-wrap {
+      display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600;
+      background: #f8fafc; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border);
+    }
+
+    /* Varovná lišta při odpojení učitele */
+    #disconnect-banner {
+      background: #fef3c7; color: #92400e; border-bottom: 1px solid #fde68a;
+      padding: 8px 16px; text-align: center; font-size: 14px; font-weight: 600; z-index: 25;
+    }
+
+    /* Střední část: Plátno + Pravý panel */
+    .workspace { flex: 1; display: flex; position: relative; overflow: hidden; }
+
+    /* Plátno myšlenkové mapy */
+    #canvas-viewport {
+      flex: 1; position: relative; overflow: hidden; cursor: grab;
+      background-color: #f8fafc;
+      background-image: radial-gradient(#cbd5e1 1.2px, transparent 1.2px);
+      background-size: 24px 24px;
+    }
+    #canvas-viewport.panning { cursor: grabbing; }
+    #map-world {
+      position: absolute; top: 0; left: 0; width: 0; height: 0;
+      transform-origin: 0 0;
+    }
+    #edges-svg {
+      position: absolute; top: -5000px; left: -5000px; width: 10000px; height: 10000px;
+      pointer-events: none; overflow: visible; z-index: 1;
+    }
+    #nodes-layer { position: absolute; top: 0; left: 0; z-index: 2; }
+    #cursors-layer { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 10; }
+
+    /* Ovládání zoomu na plátně */
+    .canvas-controls {
+      position: absolute; bottom: 16px; left: 16px; display: flex; gap: 6px;
+      background: var(--surface); padding: 6px; border-radius: 10px;
+      box-shadow: var(--shadow); border: 1px solid var(--border); z-index: 15;
+    }
+
+    /* Vzhled uzlů (Obdélníků) */
+    .mind-node {
+      position: absolute; transform: translate(-50%, -50%);
+      min-width: 150px; max-width: 260px; padding: 12px 16px;
+      border-radius: 12px; background: #ffffff; color: #0f172a;
+      border: 2.5px solid #94a3b8; box-shadow: 0 4px 10px rgba(0,0,0,0.06);
+      transition: box-shadow 0.15s, border-color 0.15s; cursor: pointer;
+    }
+    .mind-node.is-root {
+      min-width: 190px; padding: 16px 22px; border-width: 3.5px; border-color: var(--primary);
+      font-size: 17px; font-weight: 700;
+    }
+    .mind-node.selected {
+      box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.25); border-color: var(--primary);
+    }
+    .mind-node.locked-other {
+      border-style: dashed; border-color: var(--danger) !important; opacity: 0.92;
+    }
+    .node-header-badge {
+      position: absolute; top: -11px; left: 10px; padding: 2px 8px;
+      border-radius: 10px; font-size: 10px; font-weight: 700; color: #fff;
+      background: var(--primary); white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .node-lock-badge {
+      position: absolute; top: -11px; right: 10px; padding: 2px 7px;
+      border-radius: 10px; font-size: 10px; font-weight: 700; color: #fff;
+      background: var(--danger); white-space: nowrap;
+    }
+    .node-text {
+      word-wrap: break-word; white-space: pre-wrap; text-align: center;
+      font-size: 14px; line-height: 1.35; font-weight: 600;
+    }
+    .node-add-btn {
+      position: absolute; right: -14px; top: 50%; transform: translateY(-50%);
+      width: 28px; height: 28px; border-radius: 50%; background: var(--success);
+      color: #fff; border: 2px solid #fff; font-size: 18px; font-weight: 700;
+      line-height: 1; display: flex; align-items: center; justify-content: center;
+      cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.2); transition: transform 0.15s;
+    }
+    .node-add-btn:hover { transform: translateY(-50%) scale(1.15); }
+
+    /* Plovoucí editor vybraného uzlu */
+    #node-editor-toolbar {
+      position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+      background: var(--surface); padding: 10px 14px; border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(15,23,42,0.14); border: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px; z-index: 20; flex-wrap: wrap;
+    }
+    .color-picker-label {
+      display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer;
+    }
+    .color-picker-label input[type="color"] {
+      width: 26px; height: 26px; border: 1px solid var(--border); border-radius: 6px; padding: 0; cursor: pointer; background: none;
+    }
+
+    /* Kurzory ostatních uživatelů */
+    .remote-cursor {
+      position: absolute; top: 0; left: 0; pointer-events: none;
+      transition: transform 0.08s linear; z-index: 30;
+    }
+    .cursor-label {
+      position: absolute; left: 14px; top: 12px; padding: 2px 7px;
+      border-radius: 6px; font-size: 11px; font-weight: 700; color: #fff;
+      white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+    }
+
+    /* Pravý postranní panel (Lobby & Týmy pro učitele) */
+    #sidebar {
+      width: 340px; background: var(--surface); border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; height: 100%; z-index: 18;
+    }
+    .sidebar-section { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    .sidebar-section h3 { font-size: 14px; font-weight: 700; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; }
+    .sidebar-scroll { flex: 1; overflow-y: auto; padding: 14px 16px; }
+
+    /* Karty studentů a Drag & Drop zóny */
+    .student-chip {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 7px 10px; background: #f8fafc; border: 1px solid var(--border);
+      border-radius: 8px; margin-bottom: 6px; font-size: 13px; font-weight: 600;
+      cursor: grab;
+    }
+    .student-chip:active { cursor: grabbing; }
+    .team-box {
+      border: 2px dashed var(--border); border-radius: 10px; padding: 10px;
+      margin-bottom: 12px; background: #fcfcfd; transition: 0.15s;
+    }
+    .team-box.drag-over { background: #eff6ff; border-color: var(--primary); }
+    .team-box-header {
+      display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 6px;
+    }
+    .team-color-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+
+    /* Modální okno s QR kódem */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(15,23,42,0.5);
+      display: flex; align-items: center; justify-content: center; z-index: 50;
+    }
+    .modal-card {
+      background: var(--surface); padding: 28px; border-radius: 16px;
+      max-width: 380px; width: 90%; text-align: center; box-shadow: var(--shadow);
+    }
+    #qrcode-box { display: flex; justify-content: center; margin: 18px 0; }
+  </style>
+</head>
+<body>
+
+  <!-- 1. OBRAZOVKA: PŘIHLÁŠENÍ (STUDENT / UČITEL) -->
+  <div id="view-login">
+    <div class="login-card">
+      <h1>🧠 MindMup ZŠ</h1>
+      <p>Společná myšlenková mapa v reálném čase</p>
+
+      <!-- Formulář pro studenta -->
+      <div id="student-login-box">
+        <div class="form-group">
+          <label for="inp-room-code">Kód místnosti</label>
+          <input type="text" id="inp-room-code" placeholder="Např. A7K9X" maxlength="8" style="text-transform:uppercase; font-weight:700; text-align:center; letter-spacing:2px;">
+        </div>
+        <div class="form-group">
+          <label for="inp-student-name">Tvoje jméno (musí být unikátní)</label>
+          <input type="text" id="inp-student-name" placeholder="Např. Honza Novák" maxlength="22">
+        </div>
+        <button class="btn" id="btn-student-join" style="width:100%; padding:12px;">🚀 PŘIPOJIT SE DO MÍSTNOSTI</button>
+        <div id="student-status" class="status-msg status-info hidden"></div>
+
+        <div class="teacher-toggle">
+          Jste vyučující? <a id="link-show-teacher">Vytvořit nebo spravovat místnost</a>
+        </div>
+      </div>
+
+      <!-- Formulář pro učitele -->
+      <div id="teacher-login-box" class="hidden">
+        <div class="form-group">
+          <label for="inp-teacher-pass">Heslo pro učitele</label>
+          <input type="password" id="inp-teacher-pass" placeholder="Zadejte heslo...">
+        </div>
+        <div class="form-group">
+          <label for="inp-teacher-resume">Kód existující místnosti (nepovinné – pro obnovení)</label>
+          <input type="text" id="inp-teacher-resume" placeholder="Nechte prázdné pro novou místnost" style="text-transform:uppercase;">
+        </div>
+        <button class="btn" id="btn-teacher-start" style="width:100%; padding:12px;">🔑 OTEVŘÍT MÍSTNOST UČITELE</button>
+        <div id="teacher-status" class="status-msg status-error hidden"></div>
+
+        <div class="teacher-toggle">
+          <a id="link-show-student">← Zpět na přihlášení žáka</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. OBRAZOVKA: HLAVNÍ APLIKACE (LOBBY + MAPA) -->
+  <div id="view-app" class="hidden">
+    <!-- Varování při odpojení učitele (10min časovač) -->
+    <div id="disconnect-banner" class="hidden">
+      ⚠️ Učitel se odpojil! Místnost zůstane aktivní ještě <span id="disconnect-timer">10:00</span>, poté se automaticky uzavře.
+    </div>
+
+    <!-- Horní ovládací panel -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <span style="font-weight:800; font-size:16px; color:var(--primary);">🧠 MindMup</span>
+        <div class="room-badge" id="ui-room-code">KÓD: -----</div>
+        <button class="btn btn-outline btn-sm teacher-only" id="btn-show-qr" title="Zobrazit QR kód pro připojení">📱 QR Kód</button>
+        <div class="role-badge" id="ui-user-badge">Žák</div>
+      </div>
+
+      <div class="topbar-right">
+        <!-- Ovládací prvky učitele -->
+        <label class="switch-wrap teacher-only" title="Když je zapnuto, studenti nemohou upravovat žádné uzly">
+          <input type="checkbox" id="chk-readonly">
+          <span>🔒 Pouze čtení pro žáky</span>
+        </label>
+
+        <label class="switch-wrap teacher-only" title="Zobrazí váš kurzor všem připojeným studentům">
+          <input type="checkbox" id="chk-broadcast-cursor" checked>
+          <span>🖱️ Můj kurzor žákům</span>
+        </label>
+
+        <div class="switch-wrap teacher-only">
+          <span>👀 Kurzory:</span>
+          <select id="sel-cursor-filter" style="padding:2px 6px; font-size:12px; width:auto;">
+            <option value="ALL">Všichni žáci</option>
+            <option value="NONE">Nikdo</option>
+          </select>
+        </div>
+
+        <button class="btn btn-outline btn-sm teacher-only" id="btn-save-file" title="Uložit mapu a týmy (.mindmup)">💾 Uložit .mindmup</button>
+        <button class="btn btn-outline btn-sm teacher-only" id="btn-load-file" title="Načíst soubor .mindmup">📂 Načíst</button>
+        <input type="file" id="inp-file-load" accept=".mindmup,application/json" class="hidden">
+
+        <button class="btn btn-outline btn-sm" id="btn-export-png">🖼️ PNG</button>
+        <button class="btn btn-outline btn-sm" id="btn-export-pdf">📄 PDF (Vektor)</button>
+        <button class="btn btn-outline btn-sm teacher-only" id="btn-toggle-sidebar">👥 Lobby & Týmy</button>
+      </div>
+    </header>
+
+    <!-- Pracovní plocha -->
+    <div class="workspace">
+      <!-- Plátno mapy -->
+      <div id="canvas-viewport">
+        <!-- Plovoucí lišta pro úpravu vybraného obdélníku -->
+        <div id="node-editor-toolbar" class="hidden">
+          <input type="text" id="edit-node-text" placeholder="Text obdélníku..." style="width:210px; font-weight:600;">
+          <label class="color-picker-label" title="Barva obdélníku">
+            Pozadí <input type="color" id="edit-node-bg" value="#ffffff">
+          </label>
+          <label class="color-picker-label" title="Barva textu">
+            Text <input type="color" id="edit-node-fg" value="#0f172a">
+          </label>
+          <!-- Výběr týmu – vidí pouze učitel u uzlů 1. úrovně -->
+          <div id="edit-node-team-wrap" class="hidden" style="display:flex; align-items:center; gap:5px;">
+            <span style="font-size:12px; font-weight:700; color:var(--primary);">Tým:</span>
+            <select id="edit-node-team" style="width:130px; padding:5px 8px; font-size:12px;"></select>
+          </div>
+          <button class="btn btn-danger btn-sm" id="btn-delete-node" title="Smazat obdélník a jeho podvětev">🗑️ Smazat</button>
+          <button class="btn btn-outline btn-sm" id="btn-close-editor">Hotovo</button>
+        </div>
+
+        <!-- Svět mapy (posouvá se a škáluje) -->
+        <div id="map-world">
+          <svg id="edges-svg"></svg>
+          <div id="nodes-layer"></div>
+          <div id="cursors-layer"></div>
+        </div>
+
+        <!-- Ovládání pohledu -->
+        <div class="canvas-controls">
+          <button class="btn btn-outline btn-sm" id="btn-zoom-in">➕</button>
+          <button class="btn btn-outline btn-sm" id="btn-zoom-reset">🎯 Střed (100%)</button>
+          <button class="btn btn-outline btn-sm" id="btn-zoom-out">➖</button>
+        </div>
+      </div>
+
+      <!-- Pravý panel pro učitele: Schvalování a rozdělení do týmů -->
+      <aside id="sidebar" class="teacher-only">
+        <div class="sidebar-section">
+          <h3>🔔 Čekající na schválení (<span id="count-pending">0</span>)</h3>
+          <div id="pending-list" style="max-height: 140px; overflow-y: auto;">
+            <div style="font-size:12px; color:var(--muted);">Žádné nové žádosti.</div>
+          </div>
+        </div>
+
+        <div class="sidebar-scroll">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+            <h3 style="font-size:14px;">🛡️ Týmy (Přetáhni žáky)</h3>
+            <button class="btn btn-sm" id="btn-add-team">+ Nový tým</button>
+          </div>
+
+          <!-- Box pro nepřiřazené žáky -->
+          <div class="team-box" data-team-id="">
+            <div class="team-box-header">
+              <strong style="font-size:13px; color:var(--muted);">Nepřiřazení žáci</strong>
+            </div>
+            <div class="team-members-list" id="unassigned-list"></div>
+          </div>
+
+          <!-- Seznam vytvořených týmů -->
+          <div id="teams-container"></div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- MODÁLNÍ OKNO PRO QR KÓD -->
+  <div id="qr-modal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <h2 style="margin-bottom:4px;">Připojení do místnosti</h2>
+      <p style="font-size:13px; color:var(--muted);">Naskenujte QR kód nebo zadejte kód ručně</p>
+      <div id="qrcode-box"></div>
+      <div style="font-size:28px; font-weight:800; letter-spacing:3px; color:var(--primary); margin-bottom:16px;" id="modal-room-code"></div>
+      <button class="btn" id="btn-close-qr" style="width:100%;">Zavřít</button>
+    </div>
+  </div>
+
+  <script>
+    /*************************************************************************
+     * 1. GLOBÁLNÍ STAV A KONFIGURACE
+     *************************************************************************/
+    const MQTT_BROKER = 'wss://broker.emqx.io:8084/mqtt';
+    const TEACHER_PASS = 'tom123';
+    const TEAM_COLORS = ['#2563eb', '#16a34a', '#d97706', '#9333ea', '#e11d48', '#0891b2'];
+
+    const app = {
+      role: null, // 'teacher' | 'student'
+      clientId: 'u_' + Math.random().toString(36).substring(2, 10),
+      userName: '',
+      roomCode: '',
+      mqttClient: null,
+      selectedNodeId: null,
+      pan: { x: window.innerWidth / 2 - 170, y: window.innerHeight / 2 },
+      zoom: 1,
+      isPanning: false,
+      panStart: { x: 0, y: 0 },
+      cursors: {}, // { clientId: { x, y, name, teamId, role, updated } }
+      disconnectInterval: null,
+      state: {
+        teacherOnline: true,
+        teacherLastSeen: Date.now(),
+        readOnly: false,
+        broadcastTeacherCursor: true,
+        teams: [
+          { id: 't_1', name: 'Tým 1', color: '#2563eb' },
+          { id: 't_2', name: 'Tým 2', color: '#16a34a' }
+        ],
+        students: {}, // { clientId: { id, name, status: 'pending'|'approved', teamId: null, online: true } }
+        nodes: {
+          'root': {
+            id: 'root',
+            parentId: null,
+            text: 'Hlavní téma mapy',
+            bgColor: '#eff6ff',
+            textColor: '#1e3a8a',
+            teamId: null,
+            lockedBy: null,
+            lockedByName: null,
+            x: 0,
+            y: 0
+          }
+        }
+      }
+    };
+
+    // Předvyplnění kódu místnosti z URL (pro načtení přes QR kód)
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('room')) {
+      document.getElementById('inp-room-code').value = urlParams.get('room').toUpperCase();
+    }
+    const savedTeacherRoom = localStorage.getItem('mindmup_last_teacher_room');
+    if (savedTeacherRoom) {
+      document.getElementById('inp-teacher-resume').value = savedTeacherRoom;
+    }
+
+    /*************************************************************************
+     * 2. PŘIHLÁŠENÍ A SÍŤOVÁ VRSTVA (MQTT + LWT)
+     *************************************************************************/
+    const topic = (sub) => `mindmup_cz/${app.roomCode}/${sub}`;
+
+    document.getElementById('link-show-teacher').onclick = () => {
+      document.getElementById('student-login-box').classList.add('hidden');
+      document.getElementById('teacher-login-box').classList.remove('hidden');
+    };
+    document.getElementById('link-show-student').onclick = () => {
+      document.getElementById('teacher-login-box').classList.add('hidden');
+      document.getElementById('student-login-box').classList.remove('hidden');
+    };
+
+    // Start Učitele
+    document.getElementById('btn-teacher-start').onclick = () => {
+      const pass = document.getElementById('inp-teacher-pass').value.trim();
+      const errBox = document.getElementById('teacher-status');
+      if (pass !== TEACHER_PASS) {
+        errBox.textContent = '❌ Nesprávné heslo učitele!';
+        errBox.classList.remove('hidden');
+        return;
+      }
+      errBox.classList.add('hidden');
+
+      const resumeCode = document.getElementById('inp-teacher-resume').value.trim().toUpperCase();
+      app.role = 'teacher';
+      app.userName = 'Učitel';
+      app.roomCode = resumeCode || generateRoomCode();
+
+      // Obnovení ze zálohy v localStorage, pokud se učitel vrací do stejné místnosti
+      const cached = localStorage.getItem('mindmup_state_' + app.roomCode);
+      if (resumeCode && cached) {
+        try {
+          app.state = JSON.parse(cached);
+          app.state.teacherOnline = true;
+          app.state.teacherLastSeen = null;
+        } catch (e) {}
+      }
+
+      localStorage.setItem('mindmup_last_teacher_room', app.roomCode);
+      connectMQTT();
+    };
+
+    // Start Studenta
+    document.getElementById('btn-student-join').onclick = () => {
+      const code = document.getElementById('inp-room-code').value.trim().toUpperCase();
+      const name = document.getElementById('inp-student-name').value.trim();
+      if (!code || !name) {
+        showStudentStatus('Vyplň kód místnosti i své jméno.', true);
+        return;
+      }
+      app.role = 'student';
+      app.roomCode = code;
+      app.userName = name;
+      document.getElementById('btn-student-join').disabled = true;
+      showStudentStatus('⏳ Připojuji se k místnosti a čekám na schválení učitelem...', false);
+      connectMQTT();
+    };
+
+    function showStudentStatus(msg, isError) {
+      const el = document.getElementById('student-status');
+      el.textContent = msg;
+      el.className = 'status-msg ' + (isError ? 'status-error' : 'status-info');
+      el.classList.remove('hidden');
+    }
+
+    function generateRoomCode() {
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let out = '';
+      for (let i = 0; i < 5; i++) out += chars[Math.floor(Math.random() * chars.length)];
+      return out;
+    }
+
+    function connectMQTT() {
+      // Nastavení Poslední vůle (LWT) pro okamžitou detekci pádu Wi-Fi nebo zavření karty
+      const lwtPayload = JSON.stringify({
+        clientId: app.clientId,
+        role: app.role,
+        name: app.userName,
+        status: 'offline',
+        ts: Date.now()
+      });
+
+      app.mqttClient = mqtt.connect(MQTT_BROKER, {
+        clientId: app.clientId + '_' + Math.random().toString(16).slice(2, 6),
+        clean: true,
+        keepalive: 30,
+        will: {
+          topic: topic('presence'),
+          payload: lwtPayload,
+          qos: 1,
+          retain: false
+        }
+      });
+
+      app.mqttClient.on('connect', () => {
+        app.mqttClient.subscribe([
+          topic('state'),
+          topic('join_request'),
+          topic('join_response'),
+          topic('action'),
+          topic('cursors'),
+          topic('presence')
+        ], { qos: 1 });
+
+        // Oznámení přítomnosti
+        app.mqttClient.publish(topic('presence'), JSON.stringify({
+          clientId: app.clientId,
+          role: app.role,
+          name: app.userName,
+          status: 'online',
+          ts: Date.now()
+        }), { qos: 1 });
+
+        if (app.role === 'teacher') {
+          app.state.teacherOnline = true;
+          app.state.teacherLastSeen = null;
+          enterWorkspace();
+          publishFullState();
+        } else {
+          // Student posílá žádost o vstup do lobby
+          app.mqttClient.publish(topic('join_request'), JSON.stringify({
+            clientId: app.clientId,
+            name: app.userName
+          }), { qos: 1 });
+        }
+      });
+
+      app.mqttClient.on('message', (t, payload) => {
+        let data;
+        try { data = JSON.parse(payload.toString()); } catch (e) { return; }
+        const subTopic = t.split('/').pop();
+        handleMqttMessage(subTopic, data);
+      });
+    }
+
+    function publishFullState() {
+      if (app.role !== 'teacher' || !app.mqttClient) return;
+      computeTreeLayout();
+      localStorage.setItem('mindmup_state_' + app.roomCode, JSON.stringify(app.state));
+      app.mqttClient.publish(topic('state'), JSON.stringify(app.state), { qos: 1, retain: true });
+      renderAll();
+    }
+
+    function sendAction(type, payload) {
+      if (!app.mqttClient) return;
+      app.mqttClient.publish(topic('action'), JSON.stringify({
+        senderId: app.clientId,
+        type,
+        payload
+      }), { qos: 1 });
+    }
+
+    /*************************************************************************
+     * 3. ZPRACOVÁNÍ SÍŤOVÝCH ZPRÁV A PRAVIDEL
+     *************************************************************************/
+    function handleMqttMessage(sub, data) {
+      // 1. Zpracování žádostí o připojení (pouze učitel)
+      if (sub === 'join_request' && app.role === 'teacher') {
+        const { clientId, name } = data;
+        // Kontrola unikátnosti jména mezi online studenty
+        const nameTaken = Object.values(app.state.students).some(
+          s => s.online && s.id !== clientId && s.name.toLowerCase() === name.toLowerCase()
+        );
+
+        if (nameTaken) {
+          app.mqttClient.publish(topic('join_response'), JSON.stringify({
+            targetId: clientId,
+            status: 'name_taken'
+          }), { qos: 1 });
+          return;
+        }
+
+        // Pokud už byl student dříve schválen a jen obnovil spojení
+        if (app.state.students[clientId] && app.state.students[clientId].status === 'approved') {
+          app.state.students[clientId].online = true;
+          app.mqttClient.publish(topic('join_response'), JSON.stringify({
+            targetId: clientId,
+            status: 'approved'
+          }), { qos: 1 });
+          publishFullState();
+          return;
+        }
+
+        // Nový student čeká v lobby na schválení
+        app.state.students[clientId] = {
+          id: clientId,
+          name: name,
+          status: 'pending',
+          teamId: null,
+          online: true
+        };
+        renderSidebar();
+      }
+
+      // 2. Odpověď na žádost o připojení (pro studenta)
+      if (sub === 'join_response' && app.role === 'student') {
+        if (data.targetId !== app.clientId) return;
+        if (data.status === 'name_taken') {
+          document.getElementById('btn-student-join').disabled = false;
+          showStudentStatus('⚠️ Toto jméno už v místnosti někdo používá! Zvol si prosím jiné.', true);
+          app.mqttClient.end(true);
+        } else if (data.status === 'rejected') {
+          document.getElementById('btn-student-join').disabled = false;
+          showStudentStatus('❌ Učitel zamítl tvou žádost o připojení.', true);
+          app.mqttClient.end(true);
+        } else if (data.status === 'kicked') {
+          alert('Byl(a) jsi učitelem odpojen(a) z místnosti.');
+          window.location.reload();
+        } else if (data.status === 'approved') {
+          enterWorkspace();
+        }
+      }
+
+      // 3. Synchronizace celkového stavu (pro studenty a obnovení učitele)
+      if (sub === 'state') {
+        if (app.role === 'student') {
+          app.state = data;
+          const me = app.state.students[app.clientId];
+          if (me && me.status === 'approved' && document.getElementById('view-app').classList.contains('hidden')) {
+            enterWorkspace();
+          }
+          checkTeacherDisconnectTimer();
+          renderAll();
+        } else if (app.role === 'teacher' && Object.keys(app.state.nodes).length === 1 && Object.keys(data.nodes || {}).length > 1) {
+          // Pokud se učitel připojil s kódem z jiného prohlížeče, přebere retained stav z MQTT
+          app.state = data;
+          app.state.teacherOnline = true;
+          app.state.teacherLastSeen = null;
+          publishFullState();
+        }
+      }
+
+      // 4. Real-time akce na mapě (přidání/úprava/zámek obdélníku)
+      if (sub === 'action') {
+        applyMapAction(data.senderId, data.type, data.payload);
+      }
+
+      // 5. Detekce odpojení / připojení (LWT Presence)
+      if (sub === 'presence') {
+        if (data.role === 'teacher') {
+          if (data.status === 'offline') {
+            app.state.teacherOnline = false;
+            app.state.teacherLastSeen = Date.now();
+          } else {
+            app.state.teacherOnline = true;
+            app.state.teacherLastSeen = null;
+          }
+          checkTeacherDisconnectTimer();
+        } else if (data.role === 'student') {
+          if (data.status === 'offline') {
+            delete app.cursors[data.clientId];
+            if (app.role === 'teacher' && app.state.students[data.clientId]) {
+              // Uvolnění jména a odemknutí uzlů, které student držel
+              delete app.state.students[data.clientId];
+              Object.values(app.state.nodes).forEach(n => {
+                if (n.lockedBy === data.clientId) {
+                  n.lockedBy = null;
+                  n.lockedByName = null;
+                }
+              });
+              publishFullState();
+            }
+          }
+        }
+      }
+
+      // 6. Přenos kurzorů v reálném čase
+      if (sub === 'cursors') {
+        if (data.clientId === app.clientId) return;
+        app.cursors[data.clientId] = { ...data, updated: Date.now() };
+        renderCursors();
+      }
+    }
+
+    function applyMapAction(senderId, type, payload) {
+      const nodes = app.state.nodes;
+      if (type === 'LOCK_NODE') {
+        const n = nodes[payload.nodeId];
+        if (n && (!n.lockedBy || n.lockedBy === senderId)) {
+          n.lockedBy = senderId;
+          n.lockedByName = payload.userName;
+        }
+      } else if (type === 'UNLOCK_NODE') {
+        const n = nodes[payload.nodeId];
+        if (n && n.lockedBy === senderId) {
+          n.lockedBy = null;
+          n.lockedByName = null;
+        }
+      } else if (type === 'UPDATE_NODE') {
+        const n = nodes[payload.nodeId];
+        if (n) {
+          if (payload.text !== undefined) n.text = payload.text;
+          if (payload.bgColor !== undefined) n.bgColor = payload.bgColor;
+          if (payload.textColor !== undefined) n.textColor = payload.textColor;
+          if (payload.teamId !== undefined && app.role === 'teacher') {
+            setSubtreeTeam(n.id, payload.teamId);
+          }
+        }
+      } else if (type === 'ADD_NODE') {
+        nodes[payload.node.id] = payload.node;
+      } else if (type === 'DELETE_NODE') {
+        deleteSubtree(payload.nodeId);
+      }
+
+      computeTreeLayout();
+      if (app.role === 'teacher') {
+        publishFullState();
+      } else {
+        renderAll();
+      }
+    }
+
+    function setSubtreeTeam(nodeId, teamId) {
+      const n = app.state.nodes[nodeId];
+      if (!n) return;
+      n.teamId = teamId;
+      Object.values(app.state.nodes).forEach(child => {
+        if (child.parentId === nodeId) setSubtreeTeam(child.id, teamId);
+      });
+    }
+
+    function deleteSubtree(nodeId) {
+      if (nodeId === 'root') return;
+      Object.values(app.state.nodes).forEach(child => {
+        if (child.parentId === nodeId) deleteSubtree(child.id);
+      });
+      delete app.state.nodes[nodeId];
+      if (app.selectedNodeId === nodeId) app.selectedNodeId = null;
+    }
+
+    /*************************************************************************
+     * 4. ČASOVAČ 10 MINUT PŘI ODPOJENÍ UČITELE
+     *************************************************************************/
+    function checkTeacherDisconnectTimer() {
+      const banner = document.getElementById('disconnect-banner');
+      const timerSpan = document.getElementById('disconnect-timer');
+
+      if (app.state.teacherOnline) {
+        banner.classList.add('hidden');
+        if (app.disconnectInterval) {
+          clearInterval(app.disconnectInterval);
+          app.disconnectInterval = null;
+        }
+        return;
+      }
+
+      banner.classList.remove('hidden');
+      if (!app.disconnectInterval) {
+        app.disconnectInterval = setInterval(() => {
+          const elapsed = Date.now() - (app.state.teacherLastSeen || Date.now());
+          const remainingMs = 10 * 60 * 1000 - elapsed;
+          if (remainingMs <= 0) {
+            clearInterval(app.disconnectInterval);
+            alert('Učitel byl odpojen déle než 10 minut. Místnost byla uzavřena.');
+            window.location.reload();
+          } else {
+            const mins = Math.floor(remainingMs / 60000);
+            const secs = Math.floor((remainingMs % 60000) / 1000);
+            timerSpan.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+          }
+        }, 1000);
+      }
+    }
+
+    /*************************************************************************
+     * 5. VSTUP DO PRACOVNÍ PLOCHY A OPRÁVNĚNÍ
+     *************************************************************************/
+    function enterWorkspace() {
+      document.getElementById('view-login').classList.add('hidden');
+      document.getElementById('view-app').classList.remove('hidden');
+      document.getElementById('ui-room-code').textContent = `KÓD: ${app.roomCode}`;
+
+      // Skrytí učitelských prvků pro studenty
+      document.querySelectorAll('.teacher-only').forEach(el => {
+        if (app.role === 'teacher') el.classList.remove('hidden');
+        else el.classList.add('hidden');
+      });
+
+      if (app.role === 'teacher') {
+        document.getElementById('ui-user-badge').textContent = '👨‍🏫 Učitel';
+        generateQrCodeModal();
+      } else {
+        app.pan.x = window.innerWidth / 2;
+      }
+
+      computeTreeLayout();
+      renderAll();
+    }
+
+    // Kontrola oprávnění: Kdo smí upravovat text/barvy daného obdélníku?
+    function canEditNodeContent(node) {
+      if (!node) return false;
+      if (node.lockedBy && node.lockedBy !== app.clientId) return false;
+      if (app.role === 'teacher') return true;
+      if (app.state.readOnly) return false;
+
+      const me = app.state.students[app.clientId];
+      if (!me || !me.teamId) return false;
+
+      // Student NESMÍ upravovat kořen ani hlavní obdélník týmu vytvořený učitelem (parentId === 'root')
+      if (node.id === 'root' || node.parentId === 'root') return false;
+      return node.teamId === me.teamId;
+    }
+
+    // Kdo smí kliknout na "+" a přidat z obdélníku další pod-obdélník?
+    function canAddChildToNode(node) {
+      if (!node) return false;
+      if (app.role === 'teacher') return true;
+      if (app.state.readOnly) return false;
+
+      const me = app.state.students[app.clientId];
+      if (!me || !me.teamId) return false;
+
+      // Student může přidávat pod-obdélníky ke svému týmovému uzlu (vytvořenému učitelem) i všem dalším ve své větvi
+      if (node.id === 'root') return false;
+      return node.teamId === me.teamId;
+    }
+
+    /*************************************************************************
+     * 6. AUTOMATICKÉ ROZVRŽENÍ UZLŮ BEZ KOLIZÍ (RADIAL TREE AUTO-LAYOUT)
+     *************************************************************************/
+    function computeTreeLayout() {
+      const nodes = app.state.nodes;
+      if (!nodes['root']) return;
+
+      const childrenMap = {};
+      Object.values(nodes).forEach(n => { childrenMap[n.id] = []; });
+      Object.values(nodes).forEach(n => {
+        if (n.parentId && childrenMap[n.parentId]) {
+          childrenMap[n.parentId].push(n.id);
+        }
+      });
+      // Deterministické řazení pro identické zobrazení u všech klientů
+      Object.keys(childrenMap).forEach(k => childrenMap[k].sort());
+
+      // Výpočet velikosti podstromu (počet listů) pro proporcionální rozdělení úhlů
+      const leafWeight = {};
+      function calcWeight(id) {
+        const ch = childrenMap[id] || [];
+        if (ch.length === 0) {
+          leafWeight[id] = 1;
+          return 1;
+        }
+        let sum = 0;
+        ch.forEach(cid => { sum += calcWeight(cid); });
+        leafWeight[id] = Math.max(1, sum);
+        return leafWeight[id];
+      }
+      calcWeight('root');
+
+      nodes['root'].x = 0;
+      nodes['root'].y = 0;
+
+      function layoutChildren(parentId, startAngle, endAngle, depth) {
+        const ch = childrenMap[parentId] || [];
+        if (ch.length === 0) return;
+
+        const totalWeight = ch.reduce((acc, cid) => acc + leafWeight[cid], 0);
+        // Dynamický poloměr zabraňující překrývání obdélníků
+        const baseRadius = depth === 1 ? 260 : depth * 240;
+        const circumferenceNeeded = totalWeight * 145;
+        const radius = Math.max(baseRadius, circumferenceNeeded / (Math.max(0.8, endAngle - startAngle)));
+
+        let currentAngle = startAngle;
+        ch.forEach(cid => {
+          const span = (endAngle - startAngle) * (leafWeight[cid] / totalWeight);
+          const midAngle = currentAngle + span / 2;
+          nodes[cid].x = Math.round(Math.cos(midAngle) * radius);
+          nodes[cid].y = Math.round(Math.sin(midAngle) * radius);
+
+          // Omezení rozptylu podvětví, aby se nekřížily
+          const childSpan = Math.min(span * 0.92, Math.PI * 0.75);
+          layoutChildren(cid, midAngle - childSpan / 2, midAngle + childSpan / 2, depth + 1);
+          currentAngle += span;
+        });
+      }
+
+      layoutChildren('root', 0, Math.PI * 2, 1);
+    }
+
+    /*************************************************************************
+     * 7. VYKRESLOVÁNÍ MAPY, HRAN, KURZORŮ A LOBBY
+     *************************************************************************/
+    function renderAll() {
+      updateUserBadge();
+      renderMap();
+      renderCursors();
+      if (app.role === 'teacher') {
+        renderSidebar();
+        syncTeacherControls();
+      }
+      updateEditorToolbar();
+    }
+
+    function updateUserBadge() {
+      if (app.role === 'student') {
+        const me = app.state.students[app.clientId];
+        const team = me && me.teamId ? app.state.teams.find(t => t.id === me.teamId) : null;
+        const badge = document.getElementById('ui-user-badge');
+        if (team) {
+          badge.textContent = `👤 ${app.userName} • ${team.name}`;
+          badge.style.background = team.color;
+          badge.style.color = '#fff';
+        } else {
+          badge.textContent = `👤 ${app.userName} (Čeká na zařazení do týmu)`;
+          badge.style.background = '#f1f5f9';
+          badge.style.color = '#475569';
+        }
+      }
+    }
+
+    function renderMap() {
+      const world = document.getElementById('map-world');
+      world.style.transform = `translate(${app.pan.x}px, ${app.pan.y}px) scale(${app.zoom})`;
+
+      const svg = document.getElementById('edges-svg');
+      const nodesLayer = document.getElementById('nodes-layer');
+      svg.innerHTML = '';
+      nodesLayer.innerHTML = '';
+
+      const nodes = app.state.nodes;
+
+      // 1. Vykreslení spojnic (SVG křivky)
+      Object.values(nodes).forEach(n => {
+        if (!n.parentId || !nodes[n.parentId]) return;
+        const p = nodes[n.parentId];
+        const team = n.teamId ? app.state.teams.find(t => t.id === n.teamId) : null;
+        const strokeColor = team ? team.color : '#94a3b8';
+
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', p.x + 5000);
+        line.setAttribute('y1', p.y + 5000);
+        line.setAttribute('x2', n.x + 5000);
+        line.setAttribute('y2', n.y + 5000);
+        line.setAttribute('stroke', strokeColor);
+        line.setAttribute('stroke-width', n.parentId === 'root' ? '4' : '2.5');
+        line.setAttribute('stroke-linecap', 'round');
+        svg.appendChild(line);
+      });
+
+      // 2. Vykreslení obdélníků (uzlů)
+      Object.values(nodes).forEach(n => {
+        const div = document.createElement('div');
+        div.className = 'mind-node' + (n.id === 'root' ? ' is-root' : '');
+        if (app.selectedNodeId === n.id) div.classList.add('selected');
+        if (n.lockedBy && n.lockedBy !== app.clientId) div.classList.add('locked-other');
+
+        div.style.left = `${n.x}px`;
+        div.style.top = `${n.y}px`;
+        div.style.backgroundColor = n.bgColor || '#ffffff';
+        div.style.color = n.textColor || '#0f172a';
+
+        const team = n.teamId ? app.state.teams.find(t => t.id === n.teamId) : null;
+        if (team) {
+          div.style.borderColor = team.color;
+          const badge = document.createElement('div');
+          badge.className = 'node-header-badge';
+          badge.style.backgroundColor = team.color;
+          badge.textContent = team.name;
+          div.appendChild(badge);
+        }
+
+        if (n.lockedBy) {
+          const lock = document.createElement('div');
+          lock.className = 'node-lock-badge';
+          lock.textContent = `🔒 ${n.lockedByName || 'Upravuje se'}`;
+          div.appendChild(lock);
+        }
+
+        const txt = document.createElement('div');
+        txt.className = 'node-text';
+        txt.textContent = n.text || '(Prázdný obdélník)';
+        div.appendChild(txt);
+
+        // Tlačítko "+" pro přidání pod-obdélníku
+        if (canAddChildToNode(n)) {
+          const addBtn = document.createElement('button');
+          addBtn.className = 'node-add-btn';
+          addBtn.textContent = '+';
+          addBtn.title = 'Přidat navazující obdélník';
+          addBtn.onclick = (e) => {
+            e.stopPropagation();
+            handleAddChildNode(n);
+          };
+          div.appendChild(addBtn);
+        }
+
+        div.onclick = (e) => {
+          e.stopPropagation();
+          handleSelectNode(n.id);
+        };
+
+        nodesLayer.appendChild(div);
+      });
+    }
+
+    /*************************************************************************
+     * 8. ÚPRAVA A ZAMYKÁNÍ OBDÉLNÍKŮ
+     *************************************************************************/
+    function handleSelectNode(nodeId) {
+      const node = app.state.nodes[nodeId];
+      if (!node) return;
+
+      if (!canEditNodeContent(node)) return;
+
+      // Odemknutí předchozího vybraného uzlu
+      if (app.selectedNodeId && app.selectedNodeId !== nodeId) {
+        unlockCurrentNode();
+      }
+
+      app.selectedNodeId = nodeId;
+      node.lockedBy = app.clientId;
+      node.lockedByName = app.userName;
+
+      sendAction('LOCK_NODE', { nodeId, userName: app.userName });
+      if (app.role === 'teacher') publishFullState();
+      else renderAll();
+    }
+
+    function unlockCurrentNode() {
+      if (!app.selectedNodeId) return;
+      const prevId = app.selectedNodeId;
+      const n = app.state.nodes[prevId];
+      if (n && n.lockedBy === app.clientId) {
+        n.lockedBy = null;
+        n.lockedByName = null;
+      }
+      app.selectedNodeId = null;
+      sendAction('UNLOCK_NODE', { nodeId: prevId });
+      if (app.role === 'teacher') publishFullState();
+      else renderAll();
+    }
+
+    function handleAddChildNode(parentNode) {
+      const newId = 'n_' + Math.random().toString(36).substring(2, 9);
+      let inheritedTeamId = parentNode.teamId;
+      if (parentNode.id === 'root' && app.state.teams.length > 0) {
+        inheritedTeamId = app.state.teams[0].id;
+      }
+
+      const newNode = {
+        id: newId,
+        parentId: parentNode.id,
+        text: 'Nový bod',
+        bgColor: '#ffffff',
+        textColor: '#0f172a',
+        teamId: inheritedTeamId,
+        lockedBy: null,
+        lockedByName: null,
+        x: parentNode.x,
+        y: parentNode.y
+      };
+
+      app.state.nodes[newId] = newNode;
+      computeTreeLayout();
+      sendAction('ADD_NODE', { node: newNode });
+
+      if (app.role === 'teacher') publishFullState();
+      handleSelectNode(newId);
+    }
+
+    function updateEditorToolbar() {
+      const toolbar = document.getElementById('node-editor-toolbar');
+      const node = app.state.nodes[app.selectedNodeId];
+
+      if (!node || !canEditNodeContent(node)) {
+        toolbar.classList.add('hidden');
+        return;
+      }
+
+      toolbar.classList.remove('hidden');
+      const inpText = document.getElementById('edit-node-text');
+      if (document.activeElement !== inpText) {
+        inpText.value = node.text;
+      }
+      document.getElementById('edit-node-bg').value = node.bgColor || '#ffffff';
+      document.getElementById('edit-node-fg').value = node.textColor || '#0f172a';
+
+      // Přiřazení týmu (pouze učitel u větví vycházejících z kořene)
+      const teamWrap = document.getElementById('edit-node-team-wrap');
+      const teamSel = document.getElementById('edit-node-team');
+      if (app.role === 'teacher' && node.parentId === 'root') {
+        teamWrap.classList.remove('hidden');
+        teamSel.innerHTML = '<option value="">-- Bez týmu --</option>';
+        app.state.teams.forEach(t => {
+          const opt = document.createElement('option');
+          opt.value = t.id;
+          opt.textContent = t.name;
+          if (node.teamId === t.id) opt.selected = true;
+          teamSel.appendChild(opt);
+        });
+      } else {
+        teamWrap.classList.add('hidden');
+      }
+
+      // Kořenový uzel nelze smazat
+      document.getElementById('btn-delete-node').style.display = node.id === 'root' ? 'none' : 'inline-flex';
+    }
+
+    // Události z editoru uzlu
+    document.getElementById('edit-node-text').oninput = (e) => {
+      const n = app.state.nodes[app.selectedNodeId];
+      if (!n) return;
+      n.text = e.target.value;
+      sendAction('UPDATE_NODE', { nodeId: n.id, text: n.text });
+      if (app.role === 'teacher') publishFullState();
+      else renderMap();
+    };
+
+    document.getElementById('edit-node-bg').oninput = (e) => {
+      const n = app.state.nodes[app.selectedNodeId];
+      if (!n) return;
+      n.bgColor = e.target.value;
+      sendAction('UPDATE_NODE', { nodeId: n.id, bgColor: n.bgColor });
+      if (app.role === 'teacher') publishFullState();
+      else renderMap();
+    };
+
+    document.getElementById('edit-node-fg').oninput = (e) => {
+      const n = app.state.nodes[app.selectedNodeId];
+      if (!n) return;
+      n.textColor = e.target.value;
+      sendAction('UPDATE_NODE', { nodeId: n.id, textColor: n.textColor });
+      if (app.role === 'teacher') publishFullState();
+      else renderMap();
+    };
+
+    document.getElementById('edit-node-team').onchange = (e) => {
+      const n = app.state.nodes[app.selectedNodeId];
+      if (!n || app.role !== 'teacher') return;
+      setSubtreeTeam(n.id, e.target.value || null);
+      publishFullState();
+    };
+
+    document.getElementById('btn-delete-node').onclick = () => {
+      if (!app.selectedNodeId || app.selectedNodeId === 'root') return;
+      const delId = app.selectedNodeId;
+      deleteSubtree(delId);
+      computeTreeLayout();
+      sendAction('DELETE_NODE', { nodeId: delId });
+      if (app.role === 'teacher') publishFullState();
+      else renderAll();
+    };
+
+    document.getElementById('btn-close-editor').onclick = () => {
+      unlockCurrentNode();
+    };
+
+    /*************************************************************************
+     * 9. SPRÁVA LOBBY A TÝMŮ (DRAG & DROP PRO UČITELE)
+     *************************************************************************/
+    function syncTeacherControls() {
+      document.getElementById('chk-readonly').checked = !!app.state.readOnly;
+      document.getElementById('chk-broadcast-cursor').checked = !!app.state.broadcastTeacherCursor;
+
+      const sel = document.getElementById('sel-cursor-filter');
+      const currentVal = sel.value;
+      sel.innerHTML = '<option value="ALL">Všichni žáci</option><option value="NONE">Nikdo</option>';
+      app.state.teams.forEach(t => {
+        const opt = document.createElement('option');
+        opt.value = t.id;
+        opt.textContent = `Jen ${t.name}`;
+        sel.appendChild(opt);
+      });
+      if ([...sel.options].some(o => o.value === currentVal)) sel.value = currentVal;
+    }
+
+    document.getElementById('chk-readonly').onchange = (e) => {
+      app.state.readOnly = e.target.checked;
+      publishFullState();
+    };
+    document.getElementById('chk-broadcast-cursor').onchange = (e) => {
+      app.state.broadcastTeacherCursor = e.target.checked;
+      publishFullState();
+    };
+    document.getElementById('sel-cursor-filter').onchange = () => renderCursors();
+
+    document.getElementById('btn-toggle-sidebar').onclick = () => {
+      document.getElementById('sidebar').classList.toggle('hidden');
+    };
+
+    function renderSidebar() {
+      if (app.role !== 'teacher') return;
+      const students = Object.values(app.state.students).filter(s => s.online);
+
+      // 1. Čekající žádosti o schválení
+      const pending = students.filter(s => s.status === 'pending');
+      document.getElementById('count-pending').textContent = pending.length;
+      const pendingList = document.getElementById('pending-list');
+      pendingList.innerHTML = '';
+
+      if (pending.length === 0) {
+        pendingList.innerHTML = '<div style="font-size:12px; color:var(--muted);">Žádné nové žádosti.</div>';
+      } else {
+        pending.forEach(s => {
+          const row = document.createElement('div');
+          row.className = 'student-chip';
+          row.style.cursor = 'default';
+          row.innerHTML = `
+            <span>${escapeHtml(s.name)}</span>
+            <div style="display:flex; gap:4px;">
+              <button class="btn btn-success btn-sm" data-approve="${s.id}">✔</button>
+              <button class="btn btn-danger btn-sm" data-reject="${s.id}">✖</button>
+            </div>
+          `;
+          pendingList.appendChild(row);
+        });
+      }
+
+      pendingList.querySelectorAll('[data-approve]').forEach(btn => {
+        btn.onclick = () => {
+          const id = btn.getAttribute('data-approve');
+          if (app.state.students[id]) {
+            app.state.students[id].status = 'approved';
+            app.mqttClient.publish(topic('join_response'), JSON.stringify({ targetId: id, status: 'approved' }), { qos: 1 });
+            publishFullState();
+          }
+        };
+      });
+
+      pendingList.querySelectorAll('[data-reject]').forEach(btn => {
+        btn.onclick = () => {
+          const id = btn.getAttribute('data-reject');
+          delete app.state.students[id];
+          app.mqttClient.publish(topic('join_response'), JSON.stringify({ targetId: id, status: 'rejected' }), { qos: 1 });
+          publishFullState();
+        };
+      });
+
+      // 2. Schválení žáci a Týmy (Drag & Drop)
+      const approved = students.filter(s => s.status === 'approved');
+      const unassignedList = document.getElementById('unassigned-list');
+      unassignedList.innerHTML = '';
+      approved.filter(s => !s.teamId).forEach(s => unassignedList.appendChild(createStudentChip(s)));
+
+      const teamsContainer = document.getElementById('teams-container');
+      teamsContainer.innerHTML = '';
+
+      app.state.teams.forEach(team => {
+        const box = document.createElement('div');
+        box.className = 'team-box';
+        box.setAttribute('data-team-id', team.id);
+
+        const header = document.createElement('div');
+        header.className = 'team-box-header';
+        header.innerHTML = `
+          <div style="display:flex; align-items:center; gap:6px; flex:1;">
+            <span class="team-color-dot" style="background:${team.color}"></span>
+            <input type="text" value="${escapeHtml(team.name)}" data-team-rename="${team.id}" style="padding:3px 6px; font-size:13px; font-weight:700;">
+          </div>
+          <button class="btn btn-outline btn-sm" data-team-del="${team.id}" title="Smazat tým">🗑️</button>
+        `;
+        box.appendChild(header);
+
+        const membersDiv = document.createElement('div');
+        membersDiv.className = 'team-members-list';
+        approved.filter(s => s.teamId === team.id).forEach(s => membersDiv.appendChild(createStudentChip(s)));
+        box.appendChild(membersDiv);
+
+        teamsContainer.appendChild(box);
+      });
+
+      // Přejmenování a mazání týmu
+      teamsContainer.querySelectorAll('[data-team-rename]').forEach(inp => {
+        inp.onchange = () => {
+          const t = app.state.teams.find(x => x.id === inp.getAttribute('data-team-rename'));
+          if (t) {
+            t.name = inp.value.trim() || 'Tým';
+            publishFullState();
+          }
+        };
+      });
+
+      teamsContainer.querySelectorAll('[data-team-del]').forEach(btn => {
+        btn.onclick = () => {
+          const tid = btn.getAttribute('data-team-del');
+          app.state.teams = app.state.teams.filter(t => t.id !== tid);
+          Object.values(app.state.students).forEach(s => { if (s.teamId === tid) s.teamId = null; });
+          Object.values(app.state.nodes).forEach(n => { if (n.teamId === tid) n.teamId = null; });
+          publishFullState();
+        };
+      });
+
+      // Aktivace Drag & Drop zón
+      document.querySelectorAll('.team-box').forEach(box => {
+        box.ondragover = (e) => { e.preventDefault(); box.classList.add('drag-over'); };
+        box.ondragleave = () => box.classList.remove('drag-over');
+        box.ondrop = (e) => {
+          e.preventDefault();
+          box.classList.remove('drag-over');
+          const studentId = e.dataTransfer.getData('text/plain');
+          const targetTeamId = box.getAttribute('data-team-id') || null;
+          if (app.state.students[studentId]) {
+            app.state.students[studentId].teamId = targetTeamId;
+            publishFullState();
+          }
+        };
+      });
+    }
+
+    function createStudentChip(student) {
+      const chip = document.createElement('div');
+      chip.className = 'student-chip';
+      chip.draggable = true;
+      chip.innerHTML = `
+        <span>👤 ${escapeHtml(student.name)}</span>
+        <button class="btn btn-outline btn-sm" style="color:var(--danger); padding:2px 6px;" title="Vyhodit žáka z lobby">Vyhodit</button>
+      `;
+      chip.ondragstart = (e) => {
+        e.dataTransfer.setData('text/plain', student.id);
+      };
+      chip.querySelector('button').onclick = () => {
+        delete app.state.students[student.id];
+        app.mqttClient.publish(topic('join_response'), JSON.stringify({ targetId: student.id, status: 'kicked' }), { qos: 1 });
+        publishFullState();
+      };
+      return chip;
+    }
+
+    document.getElementById('btn-add-team').onclick = () => {
+      const idx = app.state.teams.length + 1;
+      const color = TEAM_COLORS[(idx - 1) % TEAM_COLORS.length];
+      app.state.teams.push({
+        id: 't_' + Math.random().toString(36).substring(2, 7),
+        name: `Tým ${idx}`,
+        color
+      });
+      publishFullState();
+    };
+
+    /*************************************************************************
+     * 10. KURZORY V REÁLNÉM ČASE (FILTROVÁNÍ PODLE TÝMŮ)
+     *************************************************************************/
+    let lastCursorSent = 0;
+    const viewport = document.getElementById('canvas-viewport');
+
+    viewport.addEventListener('mousemove', (e) => {
+      if (app.isPanning) {
+        app.pan.x = e.clientX - app.panStart.x;
+        app.pan.y = e.clientY - app.panStart.y;
+        document.getElementById('map-world').style.transform = `translate(${app.pan.x}px, ${app.pan.y}px) scale(${app.zoom})`;
+        return;
+      }
+
+      // Omezení frekvence odesílání kurzoru (cca 12x za sekundu) pro šetření sítě
+      const now = Date.now();
+      if (now - lastCursorSent < 80 || !app.mqttClient) return;
+      lastCursorSent = now;
+
+      if (app.role === 'teacher' && !app.state.broadcastTeacherCursor) return;
+
+      const rect = viewport.getBoundingClientRect();
+      const worldX = Math.round((e.clientX - rect.left - app.pan.x) / app.zoom);
+      const worldY = Math.round((e.clientY - rect.top - app.pan.y) / app.zoom);
+
+      const myTeamId = app.role === 'student' ? (app.state.students[app.clientId]?.teamId || null) : 'TEACHER';
+
+      app.mqttClient.publish(topic('cursors'), JSON.stringify({
+        clientId: app.clientId,
+        name: app.userName,
+        role: app.role,
+        teamId: myTeamId,
+        x: worldX,
+        y: worldY
+      }), { qos: 0 });
+    });
+
+    function renderCursors() {
+      const layer = document.getElementById('cursors-layer');
+      layer.innerHTML = '';
+      const now = Date.now();
+
+      const myTeamId = app.role === 'student' ? (app.state.students[app.clientId]?.teamId || null) : null;
+      const teacherFilter = document.getElementById('sel-cursor-filter')?.value || 'ALL';
+
+      Object.values(app.cursors).forEach(c => {
+        if (now - c.updated > 10000) return; // Skrýt neaktivní kurzory
+
+        let visible = false;
+        if (app.role === 'teacher') {
+          if (teacherFilter === 'ALL') visible = true;
+          else if (teacherFilter === 'NONE') visible = false;
+          else visible = (c.teamId === teacherFilter);
+        } else {
+          // Žák vidí kurzor učitele (pokud ho učitel zapnul) a kurzory spoluhráčů ze svého týmu
+          if (c.role === 'teacher' && app.state.broadcastTeacherCursor) visible = true;
+          else if (myTeamId && c.teamId === myTeamId) visible = true;
+        }
+
+        if (!visible) return;
+
+        const team = app.state.teams.find(t => t.id === c.teamId);
+        const color = c.role === 'teacher' ? '#dc2626' : (team ? team.color : '#475569');
+
+        const el = document.createElement('div');
+        el.className = 'remote-cursor';
+        el.style.transform = `translate(${c.x}px, ${c.y}px)`;
+        el.innerHTML = `
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="${color}" stroke="#fff" stroke-width="2">
+            <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/>
+          </svg>
+          <div class="cursor-label" style="background:${color}">${escapeHtml(c.name)}</div>
+        `;
+        layer.appendChild(el);
+      });
+    }
+
+    /*************************************************************************
+     * 11. POSOUVÁNÍ PLÁTNA (PAN) A PŘIBLIŽOVÁNÍ (ZOOM)
+     *************************************************************************/
+    viewport.addEventListener('mousedown', (e) => {
+      if (e.target === viewport || e.target.id === 'edges-svg') {
+        if (app.selectedNodeId) unlockCurrentNode();
+        app.isPanning = true;
+        app.panStart = { x: e.clientX - app.pan.x, y: e.clientY - app.pan.y };
+        viewport.classList.add('panning');
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      app.isPanning = false;
+      viewport.classList.remove('panning');
+    });
+
+    viewport.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+      app.zoom = Math.min(2.2, Math.max(0.35, app.zoom * factor));
+      document.getElementById('map-world').style.transform = `translate(${app.pan.x}px, ${app.pan.y}px) scale(${app.zoom})`;
+    }, { passive: false });
+
+    document.getElementById('btn-zoom-in').onclick = () => {
+      app.zoom = Math.min(2.2, app.zoom * 1.15);
+      renderMap();
+    };
+    document.getElementById('btn-zoom-out').onclick = () => {
+      app.zoom = Math.max(0.35, app.zoom / 1.15);
+      renderMap();
+    };
+    document.getElementById('btn-zoom-reset').onclick = () => {
+      app.zoom = 1;
+      app.pan = { x: viewport.clientWidth / 2, y: viewport.clientHeight / 2 };
+      renderMap();
+    };
+
+    /*************************************************************************
+     * 12. UKLÁDÁNÍ (.mindmup) A EXPORT DO PNG A VEKTOROVÉHO PDF
+     *************************************************************************/
+    // Uložení vlastního souboru .mindmup (pouze mapa a týmy, bez studentů)
+    document.getElementById('btn-save-file').onclick = () => {
+      const cleanNodes = {};
+      Object.values(app.state.nodes).forEach(n => {
+        cleanNodes[n.id] = { ...n, lockedBy: null, lockedByName: null };
+      });
+      const exportData = {
+        format: 'mindmup-zs-v1',
+        savedAt: new Date().toISOString(),
+        teams: app.state.teams,
+        nodes: cleanNodes
+      };
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `mapa_${app.roomCode}.mindmup`;
+      a.click();
+    };
+
+    // Načtení souboru .mindmup
+    document.getElementById('btn-load-file').onclick = () => document.getElementById('inp-file-load').click();
+    document.getElementById('inp-file-load').onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const data = JSON.parse(ev.target.result);
+          if (!data.nodes || !data.nodes['root']) throw new Error('Neplatný soubor');
+          app.state.teams = data.teams || [];
+          app.state.nodes = data.nodes;
+          // Odstranění případných neplatných vazeb týmů u současných studentů
+          const validTeamIds = new Set(app.state.teams.map(t => t.id));
+          Object.values(app.state.students).forEach(s => {
+            if (s.teamId && !validTeamIds.has(s.teamId)) s.teamId = null;
+          });
+          publishFullState();
+        } catch (err) {
+          alert('Chyba při načítání souboru .mindmup!');
+        }
+      };
+      reader.readAsText(file);
+      e.target.value = '';
+    };
+
+    // Pomocná funkce pro výpočet ohraničení celé mapy pro export
+    function getMapBoundingBox() {
+      const nodes = Object.values(app.state.nodes);
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      nodes.forEach(n => {
+        minX = Math.min(minX, n.x - 150);
+        maxX = Math.max(maxX, n.x + 150);
+        minY = Math.min(minY, n.y - 80);
+        maxY = Math.max(maxY, n.y + 80);
+      });
+      const pad = 60;
+      return { minX: minX - pad, minY: minY - pad, width: (maxX - minX) + pad * 2, height: (maxY - minY) + pad * 2 };
+    }
+
+    // Export do PNG
+    document.getElementById('btn-export-png').onclick = () => {
+      const box = getMapBoundingBox();
+      const canvas = document.createElement('canvas');
+      const scale = 2; // Vysoké rozlišení
+      canvas.width = box.width * scale;
+      canvas.height = box.height * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(scale, scale);
+
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(0, 0, box.width, box.height);
+
+      const nodes = app.state.nodes;
+      // Spojnice
+      Object.values(nodes).forEach(n => {
+        if (!n.parentId || !nodes[n.parentId]) return;
+        const p = nodes[n.parentId];
+        const team = n.teamId ? app.state.teams.find(t => t.id === n.teamId) : null;
+        ctx.strokeStyle = team ? team.color : '#94a3b8';
+        ctx.lineWidth = n.parentId === 'root' ? 4 : 2.5;
+        ctx.beginPath();
+        ctx.moveTo(p.x - box.minX, p.y - box.minY);
+        ctx.lineTo(n.x - box.minX, n.y - box.minY);
+        ctx.stroke();
+      });
+
+      // Obdélníky
+      Object.values(nodes).forEach(n => {
+        const cx = n.x - box.minX;
+        const cy = n.y - box.minY;
+        const w = n.id === 'root' ? 210 : 170;
+        const h = n.id === 'root' ? 64 : 52;
+        const team = n.teamId ? app.state.teams.find(t => t.id === n.teamId) : null;
+
+        ctx.fillStyle = n.bgColor || '#ffffff';
+        ctx.strokeStyle = team ? team.color : (n.id === 'root' ? '#2563eb' : '#94a3b8');
+        ctx.lineWidth = n.id === 'root' ? 3.5 : 2.5;
+
+        roundRect(ctx, cx - w / 2, cy - h / 2, w, h, 10);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = n.textColor || '#0f172a';
+        ctx.font = `${n.id === 'root' ? 'bold 15px' : '600 13px'} Segoe UI, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText((n.text || '').substring(0, 28), cx, cy);
+      });
+
+      const a = document.createElement('a');
+      a.href = canvas.toDataURL('image/png');
+      a.download = `mindmup_${app.roomCode}.png`;
+      a.click();
+    };
+
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    // Export do čistě vektorového PDF (Vektorové SVG -> Tisk / Uložení do PDF s plnou podporou češtiny)
+    document.getElementById('btn-export-pdf').onclick = () => {
+      const box = getMapBoundingBox();
+      const nodes = app.state.nodes;
+      let svgElements = '';
+
+      Object.values(nodes).forEach(n => {
+        if (!n.parentId || !nodes[n.parentId]) return;
+        const p = nodes[n.parentId];
+        const team = n.teamId ? app.state.teams.find(t => t.id === n.teamId) : null;
+        const stroke = team ? team.color : '#94a3b8';
+        svgElements += `<line x1="${p.x - box.minX}" y1="${p.y - box.minY}" x2="${n.x - box.minX}" y2="${n.y - box.minY}" stroke="${stroke}" stroke-width="${n.parentId === 'root' ? 4 : 2.5}" stroke-linecap="round" />`;
+      });
+
+      Object.values(nodes).forEach(n => {
+        const cx = n.x - box.minX;
+        const cy = n.y - box.minY;
+        const w = n.id === 'root' ? 210 : 170;
+        const h = n.id === 'root' ? 64 : 52;
+        const team = n.teamId ? app.state.teams.find(t => t.id === n.teamId) : null;
+        const stroke = team ? team.color : (n.id === 'root' ? '#2563eb' : '#94a3b8');
+
+        svgElements += `
+          <rect x="${cx - w / 2}" y="${cy - h / 2}" width="${w}" height="${h}" rx="10" fill="${n.bgColor || '#ffffff'}" stroke="${stroke}" stroke-width="2.5" />
+          <text x="${cx}" y="${cy + 5}" fill="${n.textColor || '#0f172a'}" font-family="Segoe UI, Arial, sans-serif" font-size="${n.id === 'root' ? 15 : 13}" font-weight="bold" text-anchor="middle">${escapeHtml(n.text)}</text>
+        `;
+      });
+
+      const printWin = window.open('', '_blank');
+      printWin.document.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>MindMup_${app.roomCode}.pdf</title>
+          <style>
+            @page { size: landscape; margin: 0; }
+            body { margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; background: #fff; }
+            svg { width: 96vw; height: 96vh; }
+          </style>
+        </head>
+        <body>
+          <svg viewBox="0 0 ${box.width} ${box.height}" xmlns="http://www.w3.org/2000/svg">${svgElements}</svg>
+          <script>window.onload = () => { setTimeout(() => { window.print(); window.close(); }, 250); };<\/script>
+        </body>
+        </html>
+      `);
+      printWin.document.close();
+    };
+
+    /*************************************************************************
+     * 13. QR KÓD A POMOCNÉ FUNKCE
+     *************************************************************************/
+    function generateQrCodeModal() {
+      const box = document.getElementById('qrcode-box');
+      box.innerHTML = '';
+      const joinUrl = window.location.origin + window.location.pathname + '?room=' + app.roomCode;
+      new QRCode(box, {
+        text: joinUrl,
+        width: 190,
+        height: 190
+      });
+      document.getElementById('modal-room-code').textContent = app.roomCode;
+    }
+
+    document.getElementById('btn-show-qr').onclick = () => document.getElementById('qr-modal').classList.remove('hidden');
+    document.getElementById('btn-close-qr').onclick = () => document.getElementById('qr-modal').classList.add('hidden');
+
+    function escapeHtml(str) {
+      return String(str || '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+    }
+  </script>
+</body>
+</html>
